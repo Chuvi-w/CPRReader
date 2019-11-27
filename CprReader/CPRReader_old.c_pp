@@ -1,0 +1,288 @@
+#include <stdio.h>
+#include <stdint.h>
+#include <intrin.h>
+#include <vector>
+#include <direct.h>
+#include "CPRRiff.h"
+
+#define __builtin_bswap16 _byteswap_ushort
+#define __builtin_bswap32 _byteswap_ulong
+#define __builtin_bswap64 _byteswap_uint64
+
+
+template <typename T>
+inline T bswap(T s)
+{
+   switch(sizeof(T))
+   {
+      case 2: { auto res=__builtin_bswap16(*(uint16_t *)&s); return *(T *)&res; }
+      case 4: { auto res=__builtin_bswap32(*(uint32_t *)&s); return *(T *)&res; }
+      case 8: { auto res=__builtin_bswap64(*(uint64_t *)&s); return *(T *)&res; }
+      default: return s;
+   }
+}
+
+
+
+
+typedef struct RiffHDR_s
+{
+   uint32_t	chunkId;
+   uint32_t	chunkSize;
+   uint32_t	format;
+}RiffHDR_t;
+
+typedef struct ChunkHdr_s
+{
+   uint32_t	Id;   /**< —одержит символы Уfmt У (0x666d7420 в big-endian представлении)*/
+   uint32_t	Size; /**< 16 дл¤ формата PCM. Ёто оставшийс¤ размер подцепочки, начина¤ с этой позиции.*/
+}ChunkHdr_t;
+
+typedef struct Chunk_s
+{
+   ChunkHdr_t HDR;
+   uint32_t DataOffset;
+}Chunk_t;
+
+
+
+
+
+
+
+
+
+
+
+bool ReadArchChunk(const std::string &sOutDir, const std::string &sBaseTitle, void *pFileData, uint32_t nChunkDataOffset, uint32_t nChunkDataSize, int nDep)
+{
+   int nType=0;
+   int nBlockTitleLen;
+   short nBlockType;
+   int nBlockDataLen;
+   int nReadOffset=0;
+   void *ArchData=nullptr;
+   char *sBlockTitle;
+   char sArchTitleEnd[255];
+   auto PrintTabs=[nDep]()
+   {
+      for(int i=0; i<nDep; i++)
+      {
+         printf("\t");
+      }
+   };
+
+   bool bReadError=false;
+   if(nChunkDataSize<sizeof(int))
+   {
+      PrintTabs();
+      printf("Too small\n");
+      return true;
+   }
+
+   FILE *blFile=fopen((sOutDir+"\\"+sBaseTitle+".bin").c_str(), "wb");
+   if(blFile)
+   {
+      fwrite((char*)pFileData+nChunkDataOffset, nChunkDataSize, 1, blFile);
+      fclose(blFile);
+   }
+   int nTypeOffset=0;
+   bool bTypeFound=false;
+   int nBlockNum=0;
+   do
+   {
+      nBlockNum++;
+      nBlockDataLen=0;
+      nBlockType=0;
+
+      nType=bswap(*(int*)((uint32_t)pFileData+nChunkDataOffset+nReadOffset));
+      nReadOffset+=sizeof(nType);
+
+      if(nType<-2||nType > 0)
+      {
+         PrintTabs();
+         printf("Invalid type %i:", nType);
+         nReadOffset-=sizeof(nType);
+         nTypeOffset=0;
+         bTypeFound=false;
+         do
+         {
+            nTypeOffset++;
+            nType=bswap(*(int*)((uint32_t)pFileData+nChunkDataOffset+nReadOffset+nTypeOffset));
+            if(nType>=-2&&nType<0)
+            {
+
+               printf("Found <%i:%i>\n", nType, nTypeOffset);
+               bTypeFound=true;
+
+            }
+         }
+         while(!bTypeFound&&nReadOffset+nTypeOffset<nChunkDataSize);
+         if(!bTypeFound)
+         {
+            printf("NotFound\n");
+            bReadError=true;
+            break;
+         }
+
+         nReadOffset+=(nTypeOffset+sizeof(nType));
+      }
+      if(nType==0)
+      {
+         PrintTabs();
+         printf("<NoData>\n");
+         continue;
+      }
+      nBlockTitleLen=bswap(*(int*)((uint32_t)pFileData+nChunkDataOffset+nReadOffset));
+      nReadOffset+=sizeof(nBlockTitleLen);
+      if(nBlockTitleLen>(nChunkDataSize-nReadOffset))
+      {
+         PrintTabs();
+         printf("Too long title (Len=%i. Remain %i\n", nBlockTitleLen, (nChunkDataSize-nReadOffset));
+         bReadError=true;
+         break;
+      }
+      sBlockTitle=(char*)((uint32_t)pFileData+nChunkDataOffset+nReadOffset);
+      nReadOffset+=nBlockTitleLen;
+      if(sizeof(uint16_t)>(nChunkDataSize-nReadOffset))
+      {
+         PrintTabs();
+         printf("No blType (Len=%i. Remain %i\n", sizeof(uint16_t), (nChunkDataSize-nReadOffset));
+         break;
+      }
+      nBlockType=bswap(*(int16_t*)((uint32_t)pFileData+nChunkDataOffset+nReadOffset));
+      nReadOffset+=sizeof(nBlockType);
+      PrintTabs();
+      printf("<%s> <BT:%i> %i\n", sBlockTitle, nBlockType, nType);
+      if(nType==-1)
+      {
+         nBlockDataLen=bswap(*(int*)((uint32_t)pFileData+nChunkDataOffset+nReadOffset));
+         nReadOffset+=sizeof(nBlockDataLen);
+         PrintTabs();
+         if(nBlockDataLen>(nChunkDataSize-nReadOffset))
+         {
+            printf("Too long data (Len=%i. Remain %i\n", nBlockDataLen, (nChunkDataSize-nReadOffset));
+            break;
+         }
+
+         sprintf(sArchTitleEnd, "_%s_%i", sBlockTitle, nBlockNum);
+         printf("<Data> %i <%s>\n", nBlockDataLen, (sBaseTitle+sArchTitleEnd).c_str());
+         ReadArchChunk(sOutDir, sBaseTitle+sArchTitleEnd, pFileData, nChunkDataOffset+nReadOffset, nBlockDataLen, nDep+1);
+         nReadOffset+=nBlockDataLen;
+      }
+   }
+   while(nReadOffset<nChunkDataSize);
+
+   return true;
+}
+
+
+
+void ReadCPR0(const std::string &sFileName)
+{
+
+   std::string sFullName=std::string("..\\CprFiles\\")+sFileName+".cpr";
+   RiffHDR_t RiffHdr;
+   Chunk_t Ch;
+   std::vector<Chunk_t> vChunks;
+   char sArchTitle[255];
+   void *FileData;
+   //FILE *Riff = fopen("..\\CprFiles\\", "rb");
+   FILE *Riff=fopen(sFullName.c_str(), "rb");
+   if(!Riff)
+   {
+      return;
+   }
+   std::string sDirName=("OutBin\\"+sFileName);
+   _mkdir("OutBin");
+   _mkdir(sDirName.c_str());
+
+   fseek(Riff, 0, SEEK_END);
+   auto fSize=ftell(Riff);
+   fseek(Riff, 0, SEEK_SET);
+   uint32_t nFilePos=0;
+   FileData=malloc(fSize);
+   fread(FileData, fSize, 1, Riff);
+   fclose(Riff);
+
+   memcpy(&RiffHdr, (void*)((char*)(FileData)+nFilePos), sizeof(RiffHdr));
+   nFilePos+=sizeof(RiffHdr);
+   RiffHdr.chunkSize=bswap(RiffHdr.chunkSize);
+   do
+   {
+
+      memcpy(&Ch.HDR, (void*)((char*)(FileData)+nFilePos), sizeof(Ch.HDR));
+      nFilePos+=sizeof(Ch.HDR);
+      Ch.HDR.Size=bswap(Ch.HDR.Size);
+      if((fSize-nFilePos)<Ch.HDR.Size)
+      {
+         printf("Read chunk %i error. Size=%i. Remain %i\n", vChunks.size(), Ch.HDR.Size, (fSize-nFilePos));
+         break;
+      }
+      Ch.DataOffset=nFilePos;
+      vChunks.push_back(Ch);
+
+      nFilePos+=Ch.HDR.Size;
+   }
+   while((fSize-nFilePos)>sizeof(Ch.HDR));
+
+   if((fSize-nFilePos)>0)
+   {
+      printf("Some data left (%i)\n", (fSize-nFilePos));
+   }
+   uint32_t nArchDataSz=0;
+   uint32_t nReadOffset=0;
+   uint32_t nRootID=0;
+   uint32_t nArchID=0;
+   char ChWord[1024];
+
+   for(auto ch:vChunks)
+   {
+      switch(ch.HDR.Id)
+      {
+         case (uint32_t)('TOOR'):
+         {
+            nReadOffset=0;
+            nRootID++;
+            do
+            {
+               nArchDataSz=bswap(*(uint32_t*)((void*)((char*)(FileData)+ch.DataOffset+nReadOffset)));
+               nReadOffset+=sizeof(nArchDataSz);
+               memset(ChWord, 0, sizeof(ChWord));
+               if(nArchDataSz>ch.HDR.Size-nReadOffset)
+               {
+                  printf("Read Root %i error. Size=%i. Remain %i\n", nRootID, nArchDataSz, (ch.HDR.Size-nReadOffset));
+                  break;
+               }
+               memcpy(ChWord, ((void*)((char*)(FileData)+ch.DataOffset+nReadOffset)), nArchDataSz);
+               printf("ROOT<%i>:%s\n", nRootID, ChWord);
+               nReadOffset+=nArchDataSz;
+
+            }
+            while(nReadOffset<ch.HDR.Size);
+            if(nReadOffset!=ch.HDR.Size)
+            {
+               printf("ROOT %i: Remain %i bytes\n", ch.HDR.Size-nReadOffset);
+            }
+            break;
+         }
+         case (uint32_t)('HCRA'):
+         {
+            nArchID++;
+            sprintf(sArchTitle, "ARCH_%i", /*sFileName.c_str(), */nArchID);
+            ReadArchChunk(sDirName, sArchTitle, FileData, ch.DataOffset, ch.HDR.Size, 0);
+
+            break;
+         }
+
+         default:
+         {
+            printf("Unknown chunk ID %x\n", ch.HDR.Id);
+         }
+      }
+
+   }
+
+   free(FileData);
+
+}
