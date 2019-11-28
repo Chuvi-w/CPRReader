@@ -2,6 +2,7 @@
 #include <intrin.h>
 #include "CPRRiff.h"
 #include "MemFile.h"
+#include <iostream>
 
 #define __builtin_bswap16 _byteswap_ushort
 #define __builtin_bswap32 _byteswap_ulong
@@ -98,6 +99,7 @@ bool CRiffFile::LoadFile(const std::vector<uint8_t> &vData)
          if(Chunk.Header.Id==FCC_ARCH)
          {
             ReadARCHChunk(Chunk);
+           // return false;
          }
          nReadPos+=(sizeof(Chunk.Header)+Chunk.Header.Size);
       } while (nReadPos<vData.size());
@@ -144,14 +146,14 @@ void CRiffFile::ReadARCHChunk(const RiffChunk_t &Chunk)
    int ChunkType=0;
    uint32_t DataSize;
    size_t ReadOffset=0;
-
+   //std::queue
    char ChWord[1024];
    uint16_t AddData16=0, AddData16sw=0;
    uint32_t AddData32=0, AddData32sw=0;
 
    std::string sFileName=m_sID+"_chunk_"+std::to_string(Chunk.Offset)+"_"+std::to_string(Chunk.Header.Size)+".bin";
-
-#if 0
+   std::cout<<sFileName<<std::endl;
+#if 1
    FILE *fOUT=fopen(sFileName.c_str(), "wb");
    if(fOUT)
    {
@@ -159,9 +161,142 @@ void CRiffFile::ReadARCHChunk(const RiffChunk_t &Chunk)
       fwrite(m_vData.data()+Chunk.Offset+sizeof(Chunk.Header), 1, Chunk.Header.Size, fOUT);
       fclose(fOUT);
    }
+  // return;
 #endif
-   if(2321447==Chunk.Offset&&Chunk.Header.Id==FCC_ARCH)
+   if(Chunk.Header.Id==FCC_ARCH)
    {
+#if 0
+      bool bPrintable=false;
+      do 
+      {
+         
+         memcpy(&DataSize, m_vData.data()+Chunk.Offset+sizeof(Chunk.Header)+ReadOffset, sizeof(DataSize));
+         DataSize=bswap(DataSize);
+         auto c1=(char*)(m_vData.data()+Chunk.Offset+sizeof(Chunk.Header)+ReadOffset+sizeof(DataSize));
+        
+         if(DataSize&&DataSize>1&&DataSize<200&&c1[DataSize-1]=='\0')
+         {
+            bPrintable=true;
+            for(uint32_t i=0; i<DataSize-1; i++)
+            {
+               if(c1[i]<0||!isprint(c1[i])||c1[i]==0)
+               {
+                  bPrintable=false;
+                  break;
+               }
+            }
+            if(bPrintable)
+            {
+               printf("\t\t<%05u>%s\n",ReadOffset,c1);
+            }
+            else
+            {
+              // printf("<%05u>::\n",ReadOffset);
+            }
+           
+         }
+         ReadOffset+=1;
+      } while (ReadOffset<Chunk.Header.Size);
+      return;
+#endif
+
+#if 1
+      bool bPrintable=false;
+      std::vector<size_t> vBlockEnds;
+      size_t BlockEnd;
+      vBlockEnds.push_back(Chunk.Header.Size);
+      bool bHaveChanges=false;
+      size_t ReadPos;
+      size_t nBlocks=0;
+      do
+      {
+         ReadPos=0;
+         memcpy(&ChunkType, m_vData.data()+Chunk.Offset+sizeof(Chunk.Header)+ReadOffset+ReadPos, sizeof(ChunkType));
+         ChunkType=bswap(ChunkType);
+         if(ChunkType==-1||ChunkType==-2)
+         {
+            ReadPos+=sizeof(ChunkType);
+            memcpy(&DataSize, m_vData.data()+Chunk.Offset+sizeof(Chunk.Header)+ReadOffset+ReadPos, sizeof(DataSize));
+            DataSize=bswap(DataSize);
+            ReadPos+=sizeof(DataSize);
+            auto c1=(char*)(m_vData.data()+Chunk.Offset+sizeof(Chunk.Header)+ReadOffset+ReadPos);
+            ReadPos+=DataSize;
+            if(DataSize&&DataSize>1&&DataSize<200&&c1[DataSize-1]=='\0')
+            {
+               bPrintable=true;
+               for(uint32_t i=0; i<DataSize-1; i++)
+               {
+                  if(c1[i]<0||!isprint(c1[i])||c1[i]==0)
+                  {
+                     bPrintable=false;
+                     break;
+                  }
+               }
+               if(bPrintable)
+               {
+                  memcpy(&AddData16, m_vData.data()+Chunk.Offset+sizeof(Chunk.Header)+ReadOffset+ReadPos, sizeof(AddData16));
+                  AddData16=bswap(AddData16);
+                  ReadPos+=sizeof(AddData16);
+                  AddData32=0;
+                  if(ChunkType==-1)
+                  {
+                     memcpy(&AddData32, m_vData.data()+Chunk.Offset+sizeof(Chunk.Header)+ReadOffset+ReadPos, sizeof(AddData32));
+                     AddData32=bswap(AddData32);
+                     ReadPos+=sizeof(AddData32);
+                  }
+                  do
+                  {
+                     bHaveChanges=false;
+                     if(vBlockEnds.back()<=ReadOffset)
+                     {
+                        bHaveChanges=true;
+                        
+                        vBlockEnds.pop_back();
+                     }
+                  }
+                  while(bHaveChanges);
+                 
+
+
+                  BlockEnd=ReadOffset+ReadPos+AddData32;
+                  if(BlockEnd<=vBlockEnds.back()||ChunkType==-2)
+                  {
+                    
+#if 0
+                     for(int i=0; i<vBlockEnds.size(); i++)
+                     {
+                        printf(" ");
+                     }
+                     printf("<%i><%05u><%05u><%u>%s\n", ChunkType,ReadOffset, AddData32, AddData16, c1);
+#endif
+                     if(ChunkType==-1)
+                     {
+                        vBlockEnds.push_back(BlockEnd);
+                     }
+                  }
+                  else
+                  {
+                     for(int i=0; i<vBlockEnds.size(); i++)
+                     {
+                        printf(" ");
+                     }
+                     printf("________<%05u><%05u><%u>%s\n", ReadOffset, AddData32, AddData16, c1);
+                     printf("");
+                  }
+                 
+               }
+               else
+               {
+                  // printf("<%05u>::\n",ReadOffset);
+               }
+
+            }
+         }
+         ReadOffset+=1;
+      }
+      while(ReadOffset<Chunk.Header.Size);
+      return;
+#endif
       do
       {
          memcpy(&ChunkType, m_vData.data()+Chunk.Offset+sizeof(Chunk.Header)+ReadOffset, sizeof(ChunkType));
@@ -182,7 +317,7 @@ void CRiffFile::ReadARCHChunk(const RiffChunk_t &Chunk)
             DataSize=ChunkType;
          }
          memset(ChWord, 0, sizeof(ChWord));
-
+         
          memcpy(ChWord, m_vData.data()+Chunk.Offset+sizeof(Chunk.Header)+ReadOffset, DataSize);
          ReadOffset+=DataSize;
 
@@ -212,7 +347,9 @@ void CRiffFile::ReadARCHChunk(const RiffChunk_t &Chunk)
             AddData32sw=bswap(AddData32);
             printf("AddData32sw=%u. BE=%u\n", AddData32sw, ReadOffset+sizeof(AddData32)+AddData32sw);
             ReadOffset+=sizeof(AddData32);
-           
+           // if(AddData16==5||AddData16==)
+            ReadOffset+=26;
+
          }
          
          
