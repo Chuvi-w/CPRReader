@@ -5,7 +5,7 @@
 
 void ReadCPR(const fs::path &fFile)
 {
-   std::string sIDName=fFile.filename().string();
+   std::string sIDName=fFile.stem().string();
    CRiffFile Riff;
    Riff.SetOutID(sIDName);
    Riff.LoadFile(fFile);
@@ -28,11 +28,11 @@ int main()
         return fs::file_size(p1)<fs::file_size(p2);
      });
      
-//      for(auto f:vCPRList)
-//      {
-//         ReadCPR(f);
-//      }
-     ReadCPR(vCPRList.back());
+     for(auto f:vCPRList)
+     {
+        ReadCPR(f);
+     }
+     //ReadCPR(vCPRList.back());
      ;
   }
 

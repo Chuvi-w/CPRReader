@@ -3,6 +3,7 @@
 #include "CPRRiff.h"
 #include "MemFile.h"
 #include <iostream>
+#include <sstream>
 
 #define __builtin_bswap16 _byteswap_ushort
 #define __builtin_bswap32 _byteswap_ulong
@@ -114,30 +115,38 @@ void CRiffFile::ReadROOTChunk(const RiffChunk_t &Chunk)
 {
    uint32_t DataSize;
    size_t ChunkOffset=0;
-   char ChWord[1024];
-
+   std::string sChunkWord;
+   size_t OldPos=0;
    if(Chunk.Header.Id==FCC_ROOT)
    {
       ChunkOffset=0;
-      int nRootID=0;
       do
       {
          memcpy(&DataSize, m_vData.data()+Chunk.Offset+sizeof(Chunk.Header)+ChunkOffset, sizeof(DataSize));
          DataSize=bswap(DataSize);
-
-         memset(ChWord, 0, sizeof(ChWord));
+         if(!sChunkWord.empty())
+         {
+            sChunkWord.push_back('_');
+         }
+         OldPos=sChunkWord.size();
+         sChunkWord.resize(sChunkWord.size()+DataSize, '\0');
+         //sChunkWord.clear();
          if(ChunkOffset>Chunk.Header.Size-DataSize)
          {
             printf("Read Root %i error. Size=%i. Remain %i\n", Chunk.Offset, DataSize, (Chunk.Header.Size-ChunkOffset));
             break;
          }
-         memcpy(ChWord, m_vData.data()+Chunk.Offset+sizeof(Chunk.Header)+ChunkOffset+sizeof(DataSize), DataSize);
-         printf("ROOT<%i>:%s\n", nRootID++, ChWord);
+         memcpy(&sChunkWord[OldPos], m_vData.data()+Chunk.Offset+sizeof(Chunk.Header)+ChunkOffset+sizeof(DataSize), DataSize);
+        
          ChunkOffset+=DataSize+sizeof(DataSize);
+      
 
       }
       while(ChunkOffset<Chunk.Header.Size);
    }
+
+   m_RootChunks.push_back(sChunkWord);
+  
 }
 
 void CRiffFile::ReadARCHChunk(const RiffChunk_t &Chunk)
@@ -150,11 +159,11 @@ void CRiffFile::ReadARCHChunk(const RiffChunk_t &Chunk)
    char ChWord[1024];
    uint16_t AddData16=0, AddData16sw=0;
    uint32_t AddData32=0, AddData32sw=0;
-
-   std::string sFileName=m_sID+"_chunk_"+std::to_string(Chunk.Offset)+"_"+std::to_string(Chunk.Header.Size)+".bin";
+   std::string sFileName=m_RootChunks.back()+"_"+m_sID;
+   //std::string sFileName=m_sID+"_chunk_"+std::to_string(Chunk.Offset)+"_"+std::to_string(Chunk.Header.Size)+".bin";
    std::cout<<sFileName<<std::endl;
 #if 1
-   FILE *fOUT=fopen(sFileName.c_str(), "wb");
+   FILE *fOUT=fopen((sFileName+".bin").c_str(), "wb");
    if(fOUT)
    {
       printf("Write %s\n", sFileName.c_str());
@@ -200,39 +209,54 @@ void CRiffFile::ReadARCHChunk(const RiffChunk_t &Chunk)
       return;
 #endif
 
+      std::stringstream sChunkText;
 #if 1
       bool bPrintable=false;
-      std::vector<size_t> vBlockEnds;
+      std::vector<std::pair<size_t,size_t>> vBlockEnds;
       size_t BlockEnd;
-      vBlockEnds.push_back(Chunk.Header.Size);
+      vBlockEnds.push_back(std::make_pair((size_t)0, (size_t)Chunk.Header.Size));
       bool bHaveChanges=false;
       size_t ReadPos;
       size_t nBlocks=0;
+
+      auto PrintSpaces=[&vBlockEnds, &sChunkText]()
+      {
+         for(int i=0; i<vBlockEnds.size(); i++)
+         {
+            sChunkText<<" ";
+         }
+      };
+
       do
       {
          ReadPos=0;
          memcpy(&ChunkType, m_vData.data()+Chunk.Offset+sizeof(Chunk.Header)+ReadOffset+ReadPos, sizeof(ChunkType));
          ChunkType=bswap(ChunkType);
-         if(ChunkType==-1||ChunkType==-2)
+         ReadPos+=sizeof(ChunkType);
+         memcpy(&DataSize, m_vData.data()+Chunk.Offset+sizeof(Chunk.Header)+ReadOffset+ReadPos, sizeof(DataSize));
+         DataSize=bswap(DataSize);
+         ReadPos+=sizeof(DataSize);
+         auto c1=(char*)(m_vData.data()+Chunk.Offset+sizeof(Chunk.Header)+ReadOffset+ReadPos);
+         ReadPos+=DataSize;
+         if(
+            DataSize&&
+            DataSize>1&&
+            DataSize<200&&
+            Chunk.Offset+sizeof(Chunk.Header)+ReadOffset+ReadPos+DataSize<m_vData.size()&&
+            c1[DataSize-1]=='\0')
          {
-            ReadPos+=sizeof(ChunkType);
-            memcpy(&DataSize, m_vData.data()+Chunk.Offset+sizeof(Chunk.Header)+ReadOffset+ReadPos, sizeof(DataSize));
-            DataSize=bswap(DataSize);
-            ReadPos+=sizeof(DataSize);
-            auto c1=(char*)(m_vData.data()+Chunk.Offset+sizeof(Chunk.Header)+ReadOffset+ReadPos);
-            ReadPos+=DataSize;
-            if(DataSize&&DataSize>1&&DataSize<200&&c1[DataSize-1]=='\0')
+            bPrintable=true;
+            for(uint32_t i=0; i<DataSize-1; i++)
             {
-               bPrintable=true;
-               for(uint32_t i=0; i<DataSize-1; i++)
+               if(c1[i]<0||!isprint(c1[i])||c1[i]==0)
                {
-                  if(c1[i]<0||!isprint(c1[i])||c1[i]==0)
-                  {
-                     bPrintable=false;
-                     break;
-                  }
+                  bPrintable=false;
+                  break;
                }
-               if(bPrintable)
+            }
+            if(bPrintable)
+            {
+               if(ChunkType==-1||ChunkType==-2)
                {
                   memcpy(&AddData16, m_vData.data()+Chunk.Offset+sizeof(Chunk.Header)+ReadOffset+ReadPos, sizeof(AddData16));
                   AddData16=bswap(AddData16);
@@ -244,57 +268,70 @@ void CRiffFile::ReadARCHChunk(const RiffChunk_t &Chunk)
                      AddData32=bswap(AddData32);
                      ReadPos+=sizeof(AddData32);
                   }
-                  do
-                  {
-                     bHaveChanges=false;
-                     if(vBlockEnds.back()<=ReadOffset)
-                     {
-                        bHaveChanges=true;
-                        
-                        vBlockEnds.pop_back();
-                     }
-                  }
-                  while(bHaveChanges);
-                 
 
 
                   BlockEnd=ReadOffset+ReadPos+AddData32;
-                  if(BlockEnd<=vBlockEnds.back()||ChunkType==-2)
+
+                  if(BlockEnd<=vBlockEnds.back().second||ChunkType==-2)
                   {
-                    
-#if 0
-                     for(int i=0; i<vBlockEnds.size(); i++)
-                     {
-                        printf(" ");
-                     }
-                     printf("<%i><%05u><%05u><%u>%s\n", ChunkType,ReadOffset, AddData32, AddData16, c1);
-#endif
+
+                     //printf("<%i><%05u><%05u><%u>%s\n", ChunkType,ReadOffset, AddData32, AddData16, c1);
+                     PrintSpaces();
+                     sChunkText<<"<"<<ReadOffset-vBlockEnds.back().first<<"> "<<c1<<" {"<<AddData16<<"}";
                      if(ChunkType==-1)
                      {
-                        vBlockEnds.push_back(BlockEnd);
+                        sChunkText<<" ["<<AddData32<<"]"<<std::endl;
+                        PrintSpaces();
+                        sChunkText<<"{"<<std::endl;
+
+                        vBlockEnds.push_back(std::make_pair(ReadOffset, BlockEnd));
+                     }
+                     else
+                     {
+                        sChunkText<<std::endl;
                      }
                   }
                   else
                   {
-                     for(int i=0; i<vBlockEnds.size(); i++)
-                     {
-                        printf(" ");
-                     }
-                     printf("________<%05u><%05u><%u>%s\n", ReadOffset, AddData32, AddData16, c1);
-                     printf("");
+                     PrintSpaces();
+                     sChunkText<<"BAD <"<<ReadOffset-vBlockEnds.back().first<<"> "<<c1<<" {"<<AddData16<<"} ["<<AddData32<<"]"<<std::endl;                    
                   }
-                 
                }
                else
                {
-                  // printf("<%05u>::\n",ReadOffset);
+                  PrintSpaces();
+                  sChunkText<<"Text:<"<<ReadOffset-vBlockEnds.back().first<<"> "<<c1<<std::endl;
                }
 
             }
+
          }
+
          ReadOffset+=1;
+         do
+         {
+            bHaveChanges=false;
+            if(!vBlockEnds.empty()&&vBlockEnds.back().second<=ReadOffset)
+            {
+               bHaveChanges=true;
+
+               vBlockEnds.pop_back();
+               PrintSpaces();
+               sChunkText<<"}"<<std::endl;
+            }
+         }
+         while(bHaveChanges);
+
       }
       while(ReadOffset<Chunk.Header.Size);
+      auto sStr=sChunkText.str();
+      fOUT=fopen((sFileName+".txt").c_str(), "wb");
+      if(fOUT)
+      {
+         printf("Write %s\n", sFileName.c_str());
+         fwrite(sStr.c_str(),sStr.length(),1,fOUT);
+         fclose(fOUT);
+      }
       return;
 #endif
       do

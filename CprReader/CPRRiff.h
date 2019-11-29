@@ -36,4 +36,6 @@ private:
    std::vector <uint8_t> m_vData;
    std::vector <RiffChunk_t> m_vChunks;
    std::string m_sID;
+
+   std::vector<std::string> m_RootChunks;
 };
